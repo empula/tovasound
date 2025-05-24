@@ -1,0 +1,267 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import { GoogleGenAI, Chat, GenerateContentResponse } from "@google/genai";
+
+const API_KEY = process.env.API_KEY;
+
+const chatContainer = document.getElementById('chat-container') as HTMLDivElement | null;
+const messageInput = document.getElementById('message-input') as HTMLInputElement | null;
+const sendButton = document.getElementById('send-button') as HTMLButtonElement | null;
+const appWrapper = document.getElementById('app-wrapper') as HTMLDivElement | null;
+const marketDataArea = document.getElementById('market-data-area') as HTMLDivElement | null;
+
+function displayErrorToUser(message: string, isCritical: boolean = false, targetElement?: HTMLElement | null) {
+    const displayTarget = targetElement || chatContainer;
+
+    if (displayTarget && displayTarget === chatContainer) {
+        const errorElement = document.createElement('div');
+        errorElement.classList.add('message', 'error-message');
+        errorElement.textContent = `Hata: ${message}`;
+        displayTarget.appendChild(errorElement);
+        displayTarget.scrollTop = displayTarget.scrollHeight;
+    } else if (appWrapper) {
+        const errorDiv = document.createElement('div');
+        errorDiv.textContent = isCritical ? `Kritik Hata: ${message}` : `Hata: ${message}`;
+        errorDiv.style.color = '#ffabab';
+        errorDiv.style.backgroundColor = '#5c2323';
+        errorDiv.style.padding = '10px';
+        errorDiv.style.textAlign = 'center';
+        errorDiv.style.margin = '10px auto';
+        errorDiv.style.borderRadius = '8px';
+        errorDiv.style.maxWidth = '90%';
+        const header = document.getElementById('app-header');
+        if (header && header.parentNode === appWrapper) {
+            header.after(errorDiv);
+        } else {
+            appWrapper.prepend(errorDiv);
+        }
+    } else {
+        alert(isCritical ? `Kritik Hata: ${message}` : `Hata: ${message}`);
+        console.error(isCritical ? `Kritik Hata: ${message}` : `Error: ${message}`);
+    }
+     if (isCritical && sendButton) sendButton.disabled = true;
+     if (isCritical && messageInput) messageInput.disabled = true;
+}
+
+
+if (!API_KEY) {
+    displayErrorToUser('Gemini API_KEY ortam değişkeni ayarlanmamış. Sohbet işlevselliği etkilenecektir.', true);
+}
+
+const ai = new GoogleGenAI({ apiKey: API_KEY! });
+let chat: Chat;
+
+
+function displayMessage(text: string, sender: 'user' | 'model', isStreaming: boolean = false): HTMLDivElement | null {
+    if (!chatContainer) {
+        console.error("Sohbet konteyneri bulunamadı. Mesaj gösterilemiyor.");
+        return null;
+    }
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('message', `${sender}-message`);
+    messageElement.textContent = text;
+
+    if (sender === 'model' && isStreaming) {
+        messageElement.classList.add('streaming');
+    }
+    chatContainer.appendChild(messageElement);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    return messageElement;
+}
+
+async function initializeChat() {
+    if (!API_KEY) {
+        console.warn("API_KEY ayarlanmadığı için sohbet başlatma atlanıyor.");
+        return;
+    }
+    try {
+        chat = ai.chats.create({
+            model: 'gemini-2.5-flash-preview-04-17',
+            config: { systemInstruction: "Sen tovasound adında, Türkçe konuşan ve yardımsever bir yapay zeka asistanısın." }
+        });
+        displayMessage("tovasound aktif. Nasıl yardımcı olabilirim?", 'model');
+    } catch (error) {
+        console.error("Sohbet başlatma başarısız:", error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        displayErrorToUser(`Sohbet başlatılamadı. ${errorMessage}`, true);
+    }
+}
+
+async function sendMessage() {
+    if (!API_KEY || !chat) {
+        displayErrorToUser("Sohbet başlatılmamış (API Anahtarı eksik veya kurulum başarısız olmuş olabilir).");
+        return;
+    }
+    if (!messageInput || !sendButton) {
+        displayErrorToUser("Giriş elemanları bulunamadı.");
+        return;
+    }
+
+    const messageText = messageInput.value.trim();
+    if (!messageText) return;
+
+    displayMessage(messageText, 'user');
+    messageInput.value = '';
+    sendButton.disabled = true;
+    messageInput.disabled = true;
+
+    let modelMessageElement: HTMLDivElement | null = null;
+
+    try {
+        const stream = await chat.sendMessageStream({ message: messageText });
+        let firstChunk = true;
+        let fullResponseText = "";
+
+        for await (const chunk of stream) {
+            const chunkText = chunk.text;
+            fullResponseText += chunkText;
+
+            if (firstChunk) {
+                modelMessageElement = displayMessage(chunkText, 'model', true);
+                firstChunk = false;
+            } else if (modelMessageElement) {
+                modelMessageElement.textContent = fullResponseText;
+            }
+            if (chatContainer) {
+                 chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+        if (modelMessageElement) {
+            modelMessageElement.classList.remove('streaming');
+        }
+    } catch (error) {
+        console.error("Mesaj gönderilirken hata:", error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        displayErrorToUser(`Yanıt alınamadı. ${errorMessage}`);
+        if (modelMessageElement) {
+            modelMessageElement.classList.add('error-message'); // Ensure error class is applied
+            modelMessageElement.textContent = "tovasound'dan yanıt alınırken hata oluştu.";
+        } else {
+            displayMessage("tovasound'dan yanıt alınırken hata oluştu.", 'model');
+        }
+    } finally {
+        if (sendButton) sendButton.disabled = false;
+        if (messageInput) {
+            messageInput.disabled = false;
+            messageInput.focus();
+        }
+    }
+}
+
+const marketPairs = [
+    { id: 'bitcoin', name: 'BTC/USD', vs_currency: 'usd' },
+    { id: 'ethereum', name: 'ETH/USD', vs_currency: 'usd' },
+    { id: 'euro', name: 'EUR/USD', vs_currency: 'usd' }, // CoinGecko uses 'euro' as id for Euro
+    { id: 'gold', name: 'ALTIN/USD', special: true } // Special handling for gold
+];
+
+function updateMarketDataItem(pairName: string, value: string | number, isError: boolean = false) {
+    if (!marketDataArea) return;
+    let itemElement = document.getElementById(`market-item-${pairName.replace('/', '-')}`);
+    if (!itemElement) {
+        itemElement = document.createElement('div');
+        itemElement.id = `market-item-${pairName.replace('/', '-')}`;
+        itemElement.classList.add('market-item');
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.classList.add('pair-name');
+        nameSpan.textContent = `${pairName}: `;
+        
+        const valueSpan = document.createElement('span');
+        valueSpan.classList.add('pair-value');
+        
+        itemElement.appendChild(nameSpan);
+        itemElement.appendChild(valueSpan);
+        marketDataArea.appendChild(itemElement);
+    }
+    
+    const valueSpan = itemElement.querySelector('.pair-value') as HTMLSpanElement;
+    if (valueSpan) {
+        if (isError) {
+            valueSpan.textContent = typeof value === 'string' ? value : 'Hata';
+            valueSpan.classList.add('error');
+        } else {
+            valueSpan.textContent = typeof value === 'number' 
+                ? `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` 
+                : String(value);
+            valueSpan.classList.remove('error');
+        }
+    }
+}
+
+
+async function fetchMarketValue() {
+    if (!marketDataArea) {
+        console.warn("Piyasa verisi alanı bulunamadı.");
+        return;
+    }
+
+    const idsToFetch = marketPairs.filter(p => !p.special).map(p => p.id).join(',');
+    const vsCurrency = 'usd'; // Assuming all are vs USD for this batch
+
+    try {
+        if (idsToFetch) {
+            const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${idsToFetch}&vs_currencies=${vsCurrency}`);
+            if (!response.ok) {
+                throw new Error(`CoinGecko API isteği başarısız: ${response.status} ${response.statusText}`);
+            }
+            const data = await response.json();
+
+            marketPairs.forEach(pair => {
+                if (!pair.special) {
+                    if (data[pair.id] && data[pair.id][vsCurrency]) {
+                        updateMarketDataItem(pair.name, data[pair.id][vsCurrency]);
+                    } else {
+                        updateMarketDataItem(pair.name, "Veri Yok", true);
+                        console.warn(`CoinGecko'dan ${pair.name} için veri alınamadı.`);
+                    }
+                }
+            });
+        }
+    } catch (error) {
+        console.error("Piyasa değeri alınamadı:", error);
+        marketPairs.forEach(pair => {
+            if (!pair.special) { // Only update non-special pairs with general error if API fails
+                 updateMarketDataItem(pair.name, "Yüklenemedi", true);
+            }
+        });
+    }
+
+    // Handle special cases like Gold
+    const goldPair = marketPairs.find(p => p.id === 'gold');
+    if (goldPair) {
+        // Note: Reliable, free, no-key live gold prices are hard to find for direct client-side fetching.
+        // This is a placeholder.
+        updateMarketDataItem(goldPair.name, "Veri Yok", true);
+    }
+}
+
+
+// Initial setup
+if (appWrapper && chatContainer && messageInput && sendButton && marketDataArea) {
+    sendButton.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    initializeChat();
+    fetchMarketValue();
+    setInterval(fetchMarketValue, 60000); // Update market value every 60 seconds
+
+} else {
+    let missingElements = [];
+    if (!appWrapper) missingElements.push("app-wrapper");
+    if (!chatContainer) missingElements.push("chat-container (sohbet için)");
+    if (!messageInput) missingElements.push("message-input (sohbet için)");
+    if (!sendButton) missingElements.push("send-button (sohbet için)");
+    if (!marketDataArea) missingElements.push("market-data-area (piyasa verileri için)");
+    
+    const errorMessageText = `Gerekli HTML elemanları bulunamadı: ${missingElements.join(', ')}. Bazı işlevler çalışmayabilir.`;
+    console.error(errorMessageText);
+    displayErrorToUser(errorMessageText, true, document.body); 
+}

@@ -1,0 +1,5 @@
+
+{
+  "name": "tovasound",
+  "description": "tovasound: Gemini API ile güçlendirilmiş, Apple tarzı şık bir tasarıma sahip, Türkçe konuşan sohbet uygulaması. BTC/USD, ETH/USD, EUR/USD gibi anlık piyasa değerlerini gösterir."
+}
